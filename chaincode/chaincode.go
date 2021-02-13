@@ -31,19 +31,19 @@ func (s *SmartContract) InitLedger(ctx contractapi.TransactionContextInterface) 
 }
 
 // CreateAsset issues a new asset to the world state with given details.
-func (s *SmartContract) CreateAsset(ctx contractapi.TransactionContextInterface, id string, color string, size int, appraisedValue int) error {
+func (s *SmartContract) CreateAsset(ctx contractapi.TransactionContextInterface, id string, color string, size int, appraisedValue int) (*Asset, error) {
 	
 	clientOrgID, err := getClientOrgID(ctx, true)
 	if err != nil {
-		return fmt.Errorf("failed to get verified OrgID: %v", err)
+		return nil, fmt.Errorf("failed to get verified OrgID: %v", err)
 	}
 	
-	exists, err := s.AssetExists(ctx, id)
+	exists, err := assetExists(ctx, id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if exists {
-		return fmt.Errorf("the asset %s already exists", id)
+		return nil, fmt.Errorf("the asset %s already exists", id)
 	}
 
 	asset := Asset{
@@ -56,10 +56,16 @@ func (s *SmartContract) CreateAsset(ctx contractapi.TransactionContextInterface,
 
 	assetJSON, err := json.Marshal(asset)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return ctx.GetStub().PutState(id, assetJSON)
+
+	err = ctx.GetStub().PutState(id, assetJSON)
+	if err != nil {
+		return nil, fmt.Errorf("failed to put asset in public data: %v", err)
+	}
+
+	return &asset, nil
 }
 
 // ReadAsset returns the asset stored in the world state with given id.
@@ -82,81 +88,95 @@ func (s *SmartContract) ReadAsset(ctx contractapi.TransactionContextInterface, i
 }
 
 // UpdateAsset updates an existing asset in the world state with provided parameters.
-func (s *SmartContract) UpdateAsset(ctx contractapi.TransactionContextInterface, id string, color string, size int, appraisedValue int) error {
-	exists, err := s.AssetExists(ctx, id)
+func (s *SmartContract) UpdateAsset(ctx contractapi.TransactionContextInterface, id string, color string, size int, appraisedValue int) (*Asset, error) {
+	asset, err := s.ReadAsset(ctx, id)
 	if err != nil {
-		return err
-	}
-	if !exists {
-		return fmt.Errorf("the asset %s does not exist", id)
+		return nil, err
 	}
 
 	clientOrgID, err := getClientOrgID(ctx, true)
 	if err != nil {
-		return fmt.Errorf("failed to get verified OrgID: %v", err)
-	}
-
-	// overwriting original asset with new asset
-	asset := Asset{
-		ID:             id,
-		Color:          color,
-		Size:           size,
-		Owner:          clientOrgID,
-		AppraisedValue: appraisedValue,
+		return nil, fmt.Errorf("failed to get verified OrgID: %v", err)
 	}
 
 	if clientOrgID != asset.Owner {
-		return fmt.Errorf("%s is not authorized to update this asset",
-			clientOrgID,
-		)
+		return nil, fmt.Errorf("%s is not the owner of this asset",clientOrgID)
+	}
+
+	// overwriting original asset with new asset
+	updatedAsset := Asset{
+		ID:             asset.ID,
+		Color:          color,
+		Size:           size,
+		Owner:          asset.Owner,
+		AppraisedValue: appraisedValue,
 	}
 
 
-	assetJSON, err := json.Marshal(asset)
+	updatedJSON, err := json.Marshal(updatedAsset)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return ctx.GetStub().PutState(id, assetJSON)
+	err = ctx.GetStub().PutState(id, updatedJSON)
+	if err != nil {
+		return nil, fmt.Errorf("failed to put asset in public data: %v", err)
+	}
+
+	return &updatedAsset, nil
 }
 
 // DeleteAsset deletes an given asset from the world state.
-func (s *SmartContract) DeleteAsset(ctx contractapi.TransactionContextInterface, id string) error {
-	exists, err := s.AssetExists(ctx, id)
+func (s *SmartContract) DeleteAsset(ctx contractapi.TransactionContextInterface, id string) (*Asset, error) {
+	asset, err := s.ReadAsset(ctx, id)
 	if err != nil {
-		return err
-	}
-	if !exists {
-		return fmt.Errorf("the asset %s does not exist", id)
+		return nil, err
 	}
 
-	return ctx.GetStub().DelState(id)
-}
-
-// AssetExists returns true when asset with given ID exists in world state
-func (s *SmartContract) AssetExists(ctx contractapi.TransactionContextInterface, id string) (bool, error) {
-	assetJSON, err := ctx.GetStub().GetState(id)
+	clientOrgID, err := getClientOrgID(ctx, true)
 	if err != nil {
-		return false, fmt.Errorf("failed to read from world state: %v", err)
+		return nil, fmt.Errorf("failed to get verified OrgID: %v", err)
 	}
 
-	return assetJSON != nil, nil
+	if clientOrgID != asset.Owner {
+		return nil, fmt.Errorf("%s is not the owner of this asset",clientOrgID)
+	}
+
+	err = ctx.GetStub().DelState(id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete asset: %v", err)
+	}
+	return new(Asset), nil
 }
 
 // TransferAsset updates the owner field of asset with given id in world state.
-func (s *SmartContract) TransferAsset(ctx contractapi.TransactionContextInterface, id string, newOwner string) error {
+func (s *SmartContract) TransferAsset(ctx contractapi.TransactionContextInterface, id string, newOwner string) (*Asset, error) {
 	asset, err := s.ReadAsset(ctx, id)
 	if err != nil {
-		return err
+		return nil, err
+	}
+
+	clientOrgID, err := getClientOrgID(ctx, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get verified OrgID: %v", err)
+	}
+
+	if clientOrgID != asset.Owner {
+		return nil, fmt.Errorf("%s is not the owner of this asset",clientOrgID)
 	}
 
 	asset.Owner = newOwner
 	assetJSON, err := json.Marshal(asset)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return ctx.GetStub().PutState(id, assetJSON)
+	err = ctx.GetStub().PutState(id, assetJSON)
+	if err != nil {
+		return nil, fmt.Errorf("failed to put asset in public data: %v", err)
+	}
+
+	return asset, nil
 }
 
 // GetAllAssets returns all assets found in world state
@@ -187,6 +207,14 @@ func (s *SmartContract) GetAllAssets(ctx contractapi.TransactionContextInterface
 	return assets, nil
 }
 
+func assetExists(ctx contractapi.TransactionContextInterface, id string) (bool, error) {
+	assetJSON, err := ctx.GetStub().GetState(id)
+	if err != nil {
+		return false, fmt.Errorf("failed to read from world state: %v", err)
+	}
+
+	return assetJSON != nil, nil
+}
 
 func getClientOrgID(ctx contractapi.TransactionContextInterface, verifyOrg bool) (string, error) {
 	clientOrgID, err := ctx.GetClientIdentity().GetMSPID()
@@ -204,7 +232,6 @@ func getClientOrgID(ctx contractapi.TransactionContextInterface, verifyOrg bool)
 	return clientOrgID, nil
 }
 
-// verifyClientOrgMatchesPeerOrg checks the client org id matches the peer org id.
 func verifyClientOrgMatchesPeerOrg(clientOrgID string) error {
 	peerOrgID, err := shim.GetMSPID()
 	if err != nil {
